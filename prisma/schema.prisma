@@ -1,0 +1,305 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TipoConta {
+  CORRENTE
+  CARTEIRA
+  COFRE
+
+  @@map("tipo_conta")
+}
+
+enum TipoCategoria {
+  RECEITA
+  DESPESA
+
+  @@map("tipo_categoria")
+}
+
+enum TipoTransacao {
+  REC
+  DESP
+  TRANSF
+
+  @@map("tipo_transacao")
+}
+
+enum StatusTransacao {
+  PAGO
+  PENDENTE
+
+  @@map("status_transacao")
+}
+
+enum StatusGatilho {
+  BLOQUEADO
+  LIBERADO
+
+  @@map("status_gatilho")
+}
+
+enum TipoMovimentoReserva {
+  APORTE
+  RESGATE
+
+  @@map("tipo_movimento_reserva")
+}
+
+enum ClasseAtivo {
+  RF
+  FII
+  ACOES
+  INT
+  CRIPTO
+
+  @@map("classe_ativo")
+}
+
+enum TipoAlerta {
+  VENC
+  ORCAM
+  RESUMO
+
+  @@map("tipo_alerta")
+}
+
+enum CanalAlerta {
+  PUSH
+  EMAIL
+  WHATS
+
+  @@map("canal_alerta")
+}
+
+model Usuario {
+  id               String   @id @default(uuid()) @db.Uuid
+  nome             String   @db.VarChar(120)
+  email            String   @unique @db.VarChar(180)
+  senhaHash        String   @map("senha_hash") @db.VarChar(255)
+  twoFactorEnabled Boolean  @default(false) @map("two_factor_enabled")
+  custoVidaMensal  Decimal  @default(0) @map("custo_vida_mensal") @db.Decimal(12, 2)
+  mesesReservaAlvo Int      @default(6) @map("meses_reserva_alvo")
+  pctPaguePrimeiro Decimal  @default(15.00) @map("pct_pague_primeiro") @db.Decimal(5, 2)
+  gatilhoInvestPct Decimal  @default(50.00) @map("gatilho_invest_pct") @db.Decimal(5, 2)
+  criadoEm         DateTime @default(now()) @map("criado_em")
+
+  contas             Conta[]
+  cartoesCredito     CartaoCredito[]
+  categorias         Categoria[]
+  transacoes         Transacao[]
+  recorrencias       Recorrencia[]
+  regrasAprendizado  RegraAprendizado[]
+  reservaEmergencia  ReservaEmergencia?
+  alocacoesAlvo      AlocacaoAlvo[]
+  ativosCarteira     AtivoCarteira[]
+  alertasNotificacoes AlertaNotificacao[]
+
+  @@map("usuarios")
+}
+
+model Conta {
+  id            String    @id @default(uuid()) @db.Uuid
+  usuarioId     String    @map("usuario_id") @db.Uuid
+  nome          String    @db.VarChar(80)
+  tipo          TipoConta
+  saldoAtual    Decimal   @default(0) @map("saldo_atual") @db.Decimal(12, 2)
+  ehContaPadrao Boolean   @default(false) @map("eh_conta_padrao")
+  ativa         Boolean   @default(true)
+
+  usuario            Usuario             @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  cartoesPagamento   CartaoCredito[]
+  transacoesOrigem   Transacao[]         @relation("TransacaoContaOrigem")
+  transacoesDestino  Transacao[]         @relation("TransacaoContaDestino")
+  recorrencias       Recorrencia[]
+  reservasCofre      ReservaEmergencia[]
+
+  @@index([usuarioId])
+  @@map("contas")
+}
+
+model CartaoCredito {
+  id               String  @id @default(uuid()) @db.Uuid
+  usuarioId        String  @map("usuario_id") @db.Uuid
+  contaPagamentoId String  @map("conta_pagamento_id") @db.Uuid
+  nome             String  @db.VarChar(80)
+  limiteTotal      Decimal @map("limite_total") @db.Decimal(12, 2)
+  tetoMensalAlerta Decimal @map("teto_mensal_alerta") @db.Decimal(12, 2)
+  diaFechamento    Int     @map("dia_fechamento")
+  diaVencimento    Int     @map("dia_vencimento")
+
+  usuario        Usuario       @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  contaPagamento Conta         @relation(fields: [contaPagamentoId], references: [id], onDelete: Restrict)
+  transacoes     Transacao[]
+  recorrencias   Recorrencia[]
+
+  @@index([usuarioId])
+  @@map("cartoes_credito")
+}
+
+model Categoria {
+  id              String        @id @default(uuid()) @db.Uuid
+  usuarioId       String        @map("usuario_id") @db.Uuid
+  nome            String        @db.VarChar(60)
+  tipo            TipoCategoria
+  ehEssencial     Boolean       @default(false) @map("eh_essencial")
+  orcamentoMensal Decimal?      @map("orcamento_mensal") @db.Decimal(12, 2)
+
+  usuario           Usuario            @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  transacoes        Transacao[]
+  recorrencias      Recorrencia[]
+  regrasAprendizado RegraAprendizado[]
+
+  @@unique([usuarioId, nome, tipo])
+  @@index([usuarioId])
+  @@map("categorias")
+}
+
+model Transacao {
+  id              String          @id @default(uuid()) @db.Uuid
+  usuarioId       String          @map("usuario_id") @db.Uuid
+  contaId         String?         @map("conta_id") @db.Uuid
+  contaDestinoId  String?         @map("conta_destino_id") @db.Uuid
+  cartaoId        String?         @map("cartao_id") @db.Uuid
+  categoriaId     String?         @map("categoria_id") @db.Uuid
+  recorrenciaId   String?         @map("recorrencia_id") @db.Uuid
+  tipo            TipoTransacao
+  valor           Decimal         @db.Decimal(12, 2)
+  descricao       String          @db.VarChar(200)
+  dataCompetencia DateTime        @map("data_competencia") @db.Date
+  status          StatusTransacao @default(PAGO)
+  hashDedup       String?         @map("hash_dedup") @db.VarChar(64)
+  criadoEm        DateTime        @default(now()) @map("criado_em")
+
+  usuario          Usuario           @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  conta            Conta?            @relation("TransacaoContaOrigem", fields: [contaId], references: [id], onDelete: Restrict)
+  contaDestino     Conta?            @relation("TransacaoContaDestino", fields: [contaDestinoId], references: [id], onDelete: SetNull)
+  cartao           CartaoCredito?    @relation(fields: [cartaoId], references: [id], onDelete: Restrict)
+  categoria        Categoria?        @relation(fields: [categoriaId], references: [id], onDelete: SetNull)
+  recorrencia      Recorrencia?      @relation(fields: [recorrenciaId], references: [id], onDelete: SetNull)
+  movimentoReserva MovimentoReserva?
+
+  @@index([usuarioId, dataCompetencia])
+  @@index([usuarioId, tipo, status])
+  @@index([cartaoId, dataCompetencia])
+  @@map("transacoes")
+}
+
+model Recorrencia {
+  id            String  @id @default(uuid()) @db.Uuid
+  usuarioId     String  @map("usuario_id") @db.Uuid
+  categoriaId   String  @map("categoria_id") @db.Uuid
+  contaId       String? @map("conta_id") @db.Uuid
+  cartaoId      String? @map("cartao_id") @db.Uuid
+  descricao     String  @db.VarChar(150)
+  valorEstimado Decimal @map("valor_estimado") @db.Decimal(12, 2)
+  diaVencimento Int     @map("dia_vencimento")
+  ativa         Boolean @default(true)
+
+  usuario    Usuario        @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  categoria  Categoria      @relation(fields: [categoriaId], references: [id], onDelete: Restrict)
+  conta      Conta?         @relation(fields: [contaId], references: [id], onDelete: Restrict)
+  cartao     CartaoCredito? @relation(fields: [cartaoId], references: [id], onDelete: Restrict)
+  transacoes Transacao[]
+
+  @@index([usuarioId, ativa])
+  @@map("recorrencias")
+}
+
+model RegraAprendizado {
+  id            String @id @default(uuid()) @db.Uuid
+  usuarioId     String @map("usuario_id") @db.Uuid
+  categoriaId   String @map("categoria_id") @db.Uuid
+  termoChave    String @map("termo_chave") @db.VarChar(80)
+  hitsConfianca Int    @default(1) @map("hits_confianca")
+
+  usuario   Usuario   @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  categoria Categoria @relation(fields: [categoriaId], references: [id], onDelete: Cascade)
+
+  @@unique([usuarioId, termoChave])
+  @@index([usuarioId])
+  @@map("regras_aprendizado")
+}
+
+model ReservaEmergencia {
+  id                 String        @id @default(uuid()) @db.Uuid
+  usuarioId          String        @unique @map("usuario_id") @db.Uuid
+  contaCofreId       String        @map("conta_cofre_id") @db.Uuid
+  valorMetaCalculado Decimal       @default(0) @map("valor_meta_calculado") @db.Decimal(12, 2)
+  saldoAcumulado     Decimal       @default(0) @map("saldo_acumulado") @db.Decimal(12, 2)
+  travaResgateAtiva  Boolean       @default(true) @map("trava_resgate_ativa")
+  statusGatilho      StatusGatilho @default(BLOQUEADO) @map("status_gatilho")
+  atualizadoEm       DateTime      @default(now()) @updatedAt @map("atualizado_em")
+
+  usuario    Usuario            @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  contaCofre Conta              @relation(fields: [contaCofreId], references: [id], onDelete: Restrict)
+  movimentos MovimentoReserva[]
+
+  @@map("reserva_emergencia")
+}
+
+model MovimentoReserva {
+  id                   String               @id @default(uuid()) @db.Uuid
+  reservaId            String               @map("reserva_id") @db.Uuid
+  transacaoOrigemId    String?              @unique @map("transacao_origem_id") @db.Uuid
+  tipo                 TipoMovimentoReserva
+  valor                Decimal              @db.Decimal(12, 2)
+  justificativaResgate String?              @map("justificativa_resgate") @db.Text
+  dataMovimento        DateTime             @default(now()) @map("data_movimento")
+
+  reserva         ReservaEmergencia @relation(fields: [reservaId], references: [id], onDelete: Cascade)
+  transacaoOrigem Transacao?        @relation(fields: [transacaoOrigemId], references: [id], onDelete: SetNull)
+
+  @@index([reservaId, dataMovimento])
+  @@map("movimentos_reserva")
+}
+
+model AlocacaoAlvo {
+  id              String      @id @default(uuid()) @db.Uuid
+  usuarioId       String      @map("usuario_id") @db.Uuid
+  classeAtivo     ClasseAtivo @map("classe_ativo")
+  percentualIdeal Decimal     @map("percentual_ideal") @db.Decimal(5, 2)
+  atualizadoEm    DateTime    @default(now()) @updatedAt @map("atualizado_em")
+
+  usuario Usuario         @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  ativos  AtivoCarteira[]
+
+  @@unique([usuarioId, classeAtivo])
+  @@map("alocacao_alvo")
+}
+
+model AtivoCarteira {
+  id                String  @id @default(uuid()) @db.Uuid
+  usuarioId         String  @map("usuario_id") @db.Uuid
+  alocacaoId        String  @map("alocacao_id") @db.Uuid
+  tickerOuNome      String  @map("ticker_ou_nome") @db.VarChar(60)
+  quantidade        Decimal @db.Decimal(14, 6)
+  valorInvestido    Decimal @map("valor_investido") @db.Decimal(12, 2)
+  saldoAtualMercado Decimal @map("saldo_atual_mercado") @db.Decimal(12, 2)
+
+  usuario  Usuario      @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  alocacao AlocacaoAlvo @relation(fields: [alocacaoId], references: [id], onDelete: Restrict)
+
+  @@index([usuarioId, alocacaoId])
+  @@map("ativos_carteira")
+}
+
+model AlertaNotificacao {
+  id         String      @id @default(uuid()) @db.Uuid
+  usuarioId  String      @map("usuario_id") @db.Uuid
+  tipoAlerta TipoAlerta  @map("tipo_alerta")
+  mensagem   String      @db.VarChar(255)
+  canal      CanalAlerta @default(PUSH)
+  lido       Boolean     @default(false)
+  enviadoEm  DateTime    @default(now()) @map("enviado_em")
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([usuarioId, lido, enviadoEm])
+  @@map("alertas_notificacoes")
+}
