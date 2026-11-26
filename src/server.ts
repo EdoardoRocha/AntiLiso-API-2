@@ -25,4 +25,8 @@ async function start(): Promise<void> {
   }
 }
 
-void start();
+if (!process.env.VERCEL) {
+  void start();
+}
+
+export { default } from './serverless.js';

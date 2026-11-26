@@ -1,3 +1,4 @@
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
@@ -28,7 +29,14 @@ import { ACCESS_COOKIE_NAME } from './shared/middlewares/authenticate.js';
 export interface BuildAppOptions {
   checkDb?: () => Promise<boolean>;
   logger?: boolean;
+  corsOrigin?: string;
 }
+
+const rootResponseSchema = z.object({
+  name: z.literal('AntiLiso API'),
+  status: z.literal('ok'),
+  health: z.literal('/health'),
+});
 
 const healthResponseSchema = z.object({
   status: z.enum(['ok', 'degraded']),
@@ -36,11 +44,19 @@ const healthResponseSchema = z.object({
   timestamp: z.string(),
 });
 
+export function parseCorsOrigins(rawOrigin: string): string[] {
+  return rawOrigin
+    .split(',')
+    .map((item) => item.trim().replace(/\/+$/, ''))
+    .filter((item) => item.length > 0);
+}
+
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const checkDb = options.checkDb ?? checkDatabaseConnection;
 
   const app = Fastify({
     logger: options.logger ?? env.NODE_ENV === 'development',
+    trustProxy: true,
   }).withTypeProvider<ZodTypeProvider>();
 
   app.setValidatorCompiler(validatorCompiler);
@@ -49,7 +65,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   registerErrorHandler(app);
 
   await app.register(cors, {
-    origin: env.CORS_ORIGIN.split(',').map((item) => item.trim()),
+    origin: parseCorsOrigins(options.corsOrigin ?? env.CORS_ORIGIN),
     credentials: true,
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
@@ -64,6 +80,24 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       signed: false,
     },
   });
+
+  app.get(
+    '/',
+    {
+      schema: {
+        response: {
+          200: rootResponseSchema,
+        },
+      },
+    },
+    async (_request, reply) => {
+      return reply.status(200).send({
+        name: 'AntiLiso API' as const,
+        status: 'ok' as const,
+        health: '/health' as const,
+      });
+    },
+  );
 
   app.get(
     '/health',
@@ -102,3 +136,38 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   return app;
 }
+
+export type ServerlessRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+
+export function createServerlessHandler(
+  options: BuildAppOptions = {},
+  appFactory: (opts: BuildAppOptions) => Promise<FastifyInstance> = buildApp,
+): ServerlessRequestHandler {
+  let readyAppPromise: Promise<FastifyInstance> | null = null;
+
+  const getReadyApp = (): Promise<FastifyInstance> => {
+    if (!readyAppPromise) {
+      readyAppPromise = (async () => {
+        const instance = await appFactory(options);
+        await instance.ready();
+        return instance;
+      })().catch((error: unknown) => {
+        readyAppPromise = null;
+        throw error;
+      });
+    }
+    return readyAppPromise;
+  };
+
+  return async function serverlessHandler(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const app = await getReadyApp();
+    app.server.emit('request', req, res);
+  };
+}
+
+const defaultServerlessHandler = createServerlessHandler();
+
+export default defaultServerlessHandler;

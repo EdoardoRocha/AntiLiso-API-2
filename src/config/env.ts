@@ -13,7 +13,17 @@ const envSchema = z.object({
 export type Env = z.infer<typeof envSchema>;
 
 export function parseEnv(raw: NodeJS.ProcessEnv = process.env): Env {
-  return envSchema.parse(raw);
+  const parsed = envSchema.safeParse(raw);
+  if (!parsed.success) {
+    if (raw === process.env) {
+      const issues = parsed.error.issues
+        .map((issue) => `${issue.path.join('.') || 'env'}: ${issue.message}`)
+        .join('; ');
+      console.error(`[AntiLiso Env] Variáveis de ambiente inválidas ou ausentes (${issues})`);
+    }
+    throw parsed.error;
+  }
+  return parsed.data;
 }
 
 export const env = parseEnv();
